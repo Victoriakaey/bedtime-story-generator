@@ -3,7 +3,10 @@ import json
 import sys
 
 from bedtime.config import MAX_REVISION_PASSES
-from bedtime.story_pipeline import run_story_pipeline
+from bedtime.story_pipeline import apply_user_feedback, run_story_pipeline
+
+
+MAX_FOLLOWUP_ROUNDS = 3
 
 
 REFUSAL_MESSAGE = (
@@ -17,7 +20,7 @@ REFUSAL_MESSAGE = (
 """
 Before submitting the assignment, describe here in a few sentences what you would have built next if you spent 2 more hours on this project:
 
-I would replace the same-model self-critic with either a cross-model judge or a pairwise comparison so the soft-score column produces real tuning signal rather than a rubber stamp (~100% of critiques score all four soft axes at 1.0 even after rewriting the rubric — see docs/ANALYSIS.md). I would also add an interactive follow-up mode so a parent could ask for a calmer / shorter / funnier revision after reading.
+I would replace the same-model self-critic with either a cross-model judge or a pairwise comparison so the soft-score column produces real tuning signal rather than a rubber stamp (~100% of critiques score all four soft axes at 1.0 even after rewriting the rubric — see docs/ANALYSIS.md). I would also expand the per-category generation strategies (`bedtime/prompts.py:CATEGORY_GUIDANCE`) with a few more specialized buckets and turn the manual_test_run report into a CI gate.
 """
 
 
@@ -27,6 +30,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--debug", action="store_true", help="Print the story brief, critic outputs, and log paths.")
     parser.add_argument("--max-revisions", type=int, default=MAX_REVISION_PASSES, help="Maximum critic-driven revision passes.")
     parser.add_argument("--no-log", action="store_true", help="Disable local JSONL and human-readable run logs.")
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help=(
+            "After printing the first story, prompt for follow-up feedback "
+            "(e.g. 'make it shorter', 'make it funnier'). Press Enter on an "
+            "empty line to finish. Each follow-up runs through the same "
+            "critic + safety blocklist."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -66,6 +79,45 @@ def main() -> None:
         raise SystemExit(2)
 
     print(result["final_story"])
+
+    if args.interactive:
+        run_followup_loop(result["brief"], result["final_story"])
+
+
+def run_followup_loop(brief: dict, current_story: str) -> None:
+    """Brain-juice idea #2: 'Allow the user to provide feedback or request changes.'
+
+    After the first story is printed, prompt for revisions until the user
+    presses Enter on an empty line (or hits EOF). Each revision goes through
+    the full reviser + critic + deterministic blocklist, so safety and branded-
+    name checks still apply to user-driven changes.
+    """
+    print()
+    print("---")
+    print(
+        "Follow-up mode: type a request (e.g. 'make it shorter', 'a bit funnier', "
+        f"'no rocket'). Press Enter to finish. Up to {MAX_FOLLOWUP_ROUNDS} revisions."
+    )
+    for round_num in range(1, MAX_FOLLOWUP_ROUNDS + 1):
+        try:
+            feedback = input(f"\n[follow-up {round_num}/{MAX_FOLLOWUP_ROUNDS}] > ").strip()
+        except EOFError:
+            print()
+            break
+        if not feedback:
+            break
+        outcome = apply_user_feedback(brief, current_story, feedback)
+        if outcome["accepted"]:
+            current_story = outcome["story"]
+            print()
+            print("--- Revised story ---")
+            print(current_story)
+        else:
+            print()
+            print(
+                "I couldn't write a safe revision for that — the change would "
+                "violate one of the bedtime safety rules. Try a different ask."
+            )
 
 
 if __name__ == "__main__":

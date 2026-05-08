@@ -25,6 +25,7 @@ from bedtime.story_utils import (  # noqa: E402
     extract_json,
     fallback_critique,
     normalize_brief,
+    normalize_category,
     normalize_critique,
     normalize_required_details,
 )
@@ -187,6 +188,25 @@ def test_branded_check_overwrites_hallucinated_field() -> None:
     assert result["passes"] is True
 
 
+@pytest.mark.parametrize(
+    "innocent_phrase",
+    [
+        "the clock hands were frozen in time",
+        "she stood frozen by surprise",
+        "the lake was completely frozen over",
+        "Anna had a great day at school",  # plain "Anna" should not trigger
+    ],
+)
+def test_branded_check_does_not_false_positive_on_common_english(innocent_phrase: str) -> None:
+    """Earlier the blocklist contained 'frozen', which over-matched any 'frozen
+    in time' / 'frozen by fear' usage. The list now only flags unambiguous
+    franchise tokens — verify innocent uses of these words pass."""
+    story = f"Once upon a time, {innocent_phrase}. The end."
+    result = apply_deterministic_branded_check(_safe_critique(), story)
+    assert result["passes"] is True
+    assert result["branded_names_in_story"] == []
+
+
 # ---------------------------------------------------------------------------
 # Bug 2 — out-of-range ages must clamp, not silently fall back to default 7
 # ---------------------------------------------------------------------------
@@ -228,3 +248,81 @@ def test_normalize_brief_keeps_intake_age_when_user_silent() -> None:
     request = "A turtle story"  # no age in user text
     brief = normalize_brief(raw, user_request=request)
     assert brief["target_age"] == 8
+
+
+# ---------------------------------------------------------------------------
+# Brain-juice idea #3 — per-category generation strategy
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw_value,expected",
+    [
+        ("cozy", "cozy"),
+        ("FUNNY", "funny"),
+        ("  Adventurous  ", "adventurous"),
+        ("spooky", "spooky"),
+        ("grief", "grief"),
+        ("educational", "educational"),
+        ("magical", "magical"),
+        ("dreamy", "cozy"),  # unknown -> default
+        ("", "cozy"),
+        (None, "cozy"),
+        (42, "cozy"),
+    ],
+)
+def test_normalize_category_pins_to_allowed_values(raw_value, expected) -> None:
+    assert normalize_category(raw_value) == expected
+
+
+def test_normalize_brief_assigns_default_category_when_intake_omits_it() -> None:
+    raw = {"premise": "A turtle story", "main_characters": ["Turtle"]}
+    brief = normalize_brief(raw, user_request="A turtle story")
+    assert brief["category"] == "cozy"
+
+
+def test_normalize_brief_passes_through_valid_category() -> None:
+    raw = {"premise": "x", "category": "spooky"}
+    brief = normalize_brief(raw, user_request="x")
+    assert brief["category"] == "spooky"
+
+
+def test_normalize_brief_falls_back_when_category_is_invalid() -> None:
+    raw = {"premise": "x", "category": "dreamy"}  # not in allowed list
+    brief = normalize_brief(raw, user_request="x")
+    assert brief["category"] == "cozy"
+
+
+def test_generator_prompt_injects_category_specific_guidance() -> None:
+    """Each category must inject distinct guidance into the generator prompt
+    so the same brief structure produces category-tailored stories."""
+    from bedtime.prompts import build_generator_prompt
+
+    base = {"premise": "x", "main_characters": [], "target_age": 7,
+            "vibe": "x", "theme_or_lesson": "x",
+            "required_details": [], "avoid": []}
+
+    cozy = build_generator_prompt({**base, "category": "cozy"})
+    spooky = build_generator_prompt({**base, "category": "spooky"})
+    grief = build_generator_prompt({**base, "category": "grief"})
+
+    assert "cozy" in cozy.lower()
+    assert "fuzzy blanket" in cozy or "tucked in" in cozy
+    assert "misunderstood" in spooky or "imaginary" in spooky
+    assert "trusted grown-up" in grief
+    # Ensure they are actually different — would catch a regression that always
+    # injects the default.
+    assert cozy != spooky != grief
+
+
+def test_generator_prompt_falls_back_to_cozy_for_unknown_category() -> None:
+    """Defensive: even if a brief somehow has a category that bypassed
+    normalize_category, the generator must not crash."""
+    from bedtime.prompts import build_generator_prompt
+
+    brief = {"premise": "x", "main_characters": [], "target_age": 7,
+             "vibe": "x", "theme_or_lesson": "x",
+             "required_details": [], "avoid": [], "category": "unknown_thing"}
+    prompt = build_generator_prompt(brief)
+    # Should fall back silently to cozy guidance
+    assert "fuzzy blanket" in prompt or "tucked in" in prompt

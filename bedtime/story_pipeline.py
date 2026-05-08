@@ -173,3 +173,40 @@ def run_story_pipeline(user_request: str, max_revisions: int = MAX_REVISION_PASS
         "duration_ms": duration_ms,
         "logs": logger.paths(),
     }
+
+
+def apply_user_feedback(brief: Dict[str, Any], current_story: str, feedback: str) -> Dict[str, Any]:
+    """Apply one round of user-driven feedback to an existing story.
+
+    The user's feedback (e.g., "make it shorter", "make it funnier") is wrapped
+    in a synthetic critique whose only revision_suggestion is the user's words.
+    The reviser produces a new draft; the critic re-judges it (so safety,
+    branded-name, and deterministic checks still run on the user-driven
+    revision); if the new draft fails any hard check we discard it and keep
+    the previous story.
+
+    Returns a dict with `accepted` (bool), `story` (str — new if accepted, old
+    if not), and `critique` (the verdict on whichever story is returned).
+    """
+    synthetic_critique: Dict[str, Any] = {
+        "passes": False,
+        "hard_checks": {
+            "safe_for_children": True,
+            "age_appropriate": True,
+            "follows_request": True,
+        },
+        "soft_scores": {
+            "bedtime_tone": 1,
+            "vocabulary_fit": 1,
+            "story_arc": 1,
+            "read_aloud_quality": 1,
+        },
+        "strengths": [],
+        "revision_suggestions": [f"User feedback after reading the story: {feedback}"],
+        "deterministic_safety_flags": [],
+    }
+    candidate = revise_story(brief, current_story, synthetic_critique)
+    verdict = judge_story(brief, candidate)
+    if critique_passes(verdict):
+        return {"accepted": True, "story": candidate, "critique": verdict}
+    return {"accepted": False, "story": current_story, "critique": verdict}

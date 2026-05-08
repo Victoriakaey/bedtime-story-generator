@@ -2,6 +2,62 @@ import json
 from typing import Any, Dict
 
 
+# Brain-juice idea #3 from the spec: "Categorize the request and use a tailored
+# generation strategy for each category." Each category has a focused paragraph
+# of generation guidance that gets injected into the generator prompt on top of
+# the universal safety/structure rules.
+CATEGORY_GUIDANCE = {
+    "cozy": (
+        "Lean into warmth and slow pace. Use soft sensory details (a fuzzy "
+        "blanket, the smell of cocoa, a humming radiator, the rustle of "
+        "leaves). The story should feel like being tucked in. Conflict is "
+        "minimal — a small worry that gets soothed by comfort, not solved by "
+        "action."
+    ),
+    "funny": (
+        "Use one or two gentle absurdities (a sock that thinks it is a king, "
+        "a cat who interviews moths). Keep humor silly and quiet, never loud "
+        "or chaotic. End with the absurdity becoming sweet rather than "
+        "punchy. The funny moment should make the child smile, not laugh out "
+        "loud right before sleep."
+    ),
+    "adventurous": (
+        "Frame the journey as a dream, a pretend voyage, or a map drawn on "
+        "the back of a cereal box. Stakes stay low; obstacles get solved by "
+        "curiosity, kindness, or noticing a small detail — never by bravery "
+        "against danger. The hero returns home before the final page."
+    ),
+    "spooky": (
+        "Whatever is initially 'spooky' MUST be revealed as misunderstood, "
+        "friendly, or imaginary by the second half of the story. No real "
+        "threat at any point. The dark forest turns out to be a glowing one. "
+        "The monster is small, lost, or wants a friend."
+    ),
+    "grief": (
+        "Allow the sadness to exist without rushing to fix it. The comfort "
+        "comes from a trusted grown-up acknowledging the feeling, sharing a "
+        "memory, and staying present. Do NOT promise the loss is undone. Do "
+        "NOT use sleep, nap, or 'not waking up' as a euphemism for death. "
+        "End on a calm, present moment, not on the loss being resolved."
+    ),
+    "educational": (
+        "Weave the lesson into one specific observable moment, not a moral "
+        "stated at the end. Show the lesson; do not state it. The child in "
+        "the story should learn the lesson by noticing something, not by "
+        "being told."
+    ),
+    "magical": (
+        "Magic should be small, decorative, and tied to feelings (a star "
+        "that hums when someone is brave; a leaf that glows when shared). "
+        "Avoid magical objects that solve adult problems. Avoid magical food "
+        "or potions the child ingests."
+    ),
+}
+
+DEFAULT_CATEGORY = "cozy"
+ALLOWED_CATEGORIES = tuple(CATEGORY_GUIDANCE.keys())
+
+
 def build_story_brief_prompt(user_request: str) -> str:
     return f"""
 You are the intent intake component for a bedtime story generator for children ages 5-10.
@@ -30,10 +86,20 @@ JSON schema:
   "main_characters": ["character names or descriptions"],
   "target_age": 7,
   "vibe": "cozy, funny, magical, adventurous, calming, etc.",
+  "category": "one of: cozy, funny, adventurous, spooky, grief, educational, magical",
   "theme_or_lesson": "gentle lesson or emotional theme",
   "required_details": ["specific names, objects, counts, or unusual details that must appear"],
   "avoid": ["content to avoid or soften"]
 }}
+
+Category selection rules:
+- Pick exactly ONE category from the allowed list above. The category drives a
+  category-specific generation strategy, so it must be a single value, not a list.
+- "cozy" is the default if the request is generic or the right category is unclear.
+- "spooky" applies even to soft fear like a friendly monster — it triggers the
+  correct softening guidance downstream.
+- "grief" applies to loss, missing someone, or a pet that passed away.
+- "educational" applies if the request explicitly emphasizes a lesson.
 
 User request:
 {user_request}
@@ -41,11 +107,18 @@ User request:
 
 
 def build_generator_prompt(brief: Dict[str, Any]) -> str:
+    category = brief.get("category", DEFAULT_CATEGORY)
+    if category not in CATEGORY_GUIDANCE:
+        category = DEFAULT_CATEGORY
+    category_guidance = CATEGORY_GUIDANCE[category]
     return f"""
 You are a warm, imaginative bedtime storyteller.
 
 Write a bedtime story using this story brief:
 {json.dumps(brief, indent=2)}
+
+Category-specific guidance for "{category}":
+{category_guidance}
 
 Requirements:
 - Always write in English regardless of the language used in the brief or original request.

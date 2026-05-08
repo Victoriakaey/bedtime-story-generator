@@ -1,0 +1,12 @@
+
+=== Run Metadata ===
+{
+  "trace_id": "bc645602-3c09-4add-9c13-ae21af4ec70c",
+  "provider": "openai",
+  "model": "gpt-3.5-turbo",
+  "user_request": "A short story",
+  "max_revision_passes": 2
+}
+
+=== Error: build_story_brief ===
+OPENAI_API_KEY is missing. Add it to .env or run with USE_LOCAL_MODEL=true for Ollama development.

@@ -37,10 +37,28 @@ def fallback_brief(user_request: str) -> Dict[str, Any]:
         "main_characters": [],
         "target_age": 7,
         "vibe": "cozy and gentle",
+        "category": "cozy",
         "theme_or_lesson": "kindness and curiosity",
         "required_details": [],
         "avoid": ["scary intensity", "violence", "unsafe behavior"],
     }
+
+
+_ALLOWED_CATEGORIES = {"cozy", "funny", "adventurous", "spooky", "grief", "educational", "magical"}
+
+
+def normalize_category(value: Any) -> str:
+    """Pin the brief's category to one of the allowed values.
+
+    The intake LLM occasionally returns a free-form word in the category field
+    (e.g. "dreamy", "calming"); map anything unknown back to "cozy" so the
+    generator always has matching guidance from CATEGORY_GUIDANCE.
+    """
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in _ALLOWED_CATEGORIES:
+            return normalized
+    return "cozy"
 
 
 def normalize_required_details(details: Any, user_request: str) -> List[str]:
@@ -97,6 +115,11 @@ BRANDED_TERM_REPLACEMENTS = {
 # brands ("snow queen" -> Elsa, "web-slinger" -> Peter Parker) and re-adds the
 # real names. We catch that here.
 BRANDED_NAMES_IN_STORY = (
+    # Specific character names + franchise place-names that are unambiguous brand
+    # references. We deliberately do NOT include common English words like
+    # "frozen" (matches "frozen in time", "frozen by fear") — the unique tokens
+    # below are sufficient because Elsa, Anna+Olaf, Hogwarts, Peter Parker etc.
+    # are themselves unambiguous franchise markers.
     "elsa",
     "anna and elsa",
     "peter parker",
@@ -107,7 +130,6 @@ BRANDED_NAMES_IN_STORY = (
     "hermione",
     "ron weasley",
     "hogwarts",
-    "frozen",
 )
 
 
@@ -170,6 +192,7 @@ def normalize_brief(raw: Dict[str, Any], user_request: str) -> Dict[str, Any]:
     if isinstance(brief.get("avoid"), str):
         brief["avoid"] = [brief["avoid"]]
     brief["required_details"] = normalize_required_details(brief.get("required_details"), user_request)
+    brief["category"] = normalize_category(brief.get("category"))
     return brief
 
 

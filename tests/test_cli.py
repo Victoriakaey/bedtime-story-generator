@@ -92,3 +92,61 @@ def test_unsafe_run_prints_refusal_and_exits_with_code_2(
     log_files = list(tmp_path.glob("*.log"))
     assert len(log_files) == 1
     assert DRAFT_STORY in log_files[0].read_text()
+
+
+# ---------------------------------------------------------------------------
+# Brain-juice idea #2 — interactive follow-up
+# ---------------------------------------------------------------------------
+
+
+REVISED_STORY = "Alice and Bob fell asleep counting tiny stars. The end."
+PASS_CRITIQUE = json.dumps(
+    {
+        "passes": True,
+        "hard_checks": {"safe_for_children": True, "age_appropriate": True, "follows_request": True},
+        "soft_scores": {"bedtime_tone": 1, "vocabulary_fit": 1, "story_arc": 1, "read_aloud_quality": 1},
+        "strengths": ["calm tone"],
+        "revision_suggestions": [],
+    }
+)
+
+
+def test_interactive_followup_applies_user_feedback_and_reprints(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """--interactive: after the first story prints, one round of user feedback
+    triggers a reviser+critic pass; the revised story is printed; then a blank
+    line ends the loop."""
+
+    # 7 LLM calls expected:
+    # initial run = brief + draft + critique (passes)
+    # follow-up   = reviser + critique (passes)
+    monkeypatch.setattr(
+        story_pipeline,
+        "call_llm",
+        _stub_llm(
+            [
+                SAFE_BRIEF,
+                DRAFT_STORY,
+                PASS_CRITIQUE,
+                REVISED_STORY,    # reviser output
+                PASS_CRITIQUE,    # critic re-judges revision
+            ]
+        ),
+    )
+    monkeypatch.setattr(run_logger, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["main.py", "--interactive", "Alice and Bob"])
+
+    # Simulate user typing "make it shorter" then pressing Enter on a blank line.
+    inputs = iter(["make it shorter", ""])
+    monkeypatch.setattr("builtins.input", lambda *args, **kwargs: next(inputs))
+
+    main_module.main()
+
+    captured = capsys.readouterr()
+    assert DRAFT_STORY in captured.out          # initial story printed
+    assert "Follow-up mode" in captured.out     # follow-up banner
+    assert REVISED_STORY in captured.out        # revised story printed
+    assert "--- Revised story ---" in captured.out

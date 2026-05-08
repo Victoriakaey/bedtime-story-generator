@@ -6,7 +6,8 @@ __pycache__/
 
 .env
 .venv/
-logs/
+logs/*
+!logs/manual/
 .pytest_cache/
 .ruff_cache/
-.venv/
+.claude/
